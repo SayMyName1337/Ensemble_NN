@@ -3754,6 +3754,7 @@ class ExperimentRunner:
             
         # Обработка основных датасетов из scikit-learn
         if self.dataset_name == "iris":
+            import numpy as np
             from sklearn.datasets import load_iris
             data = load_iris()
             self.X = data.data.astype(np.float32)  # Явное преобразование в float32
@@ -4381,6 +4382,81 @@ class ExperimentRunner:
                 
             except Exception as e:
                 print(f"Ошибка при загрузке Glass: {e}")
+
+        elif self.dataset_name == "spam":
+            try:
+                import pandas as pd
+                import os
+                import numpy as np
+                
+                # Скачивание и загрузка
+                os.makedirs('datasets', exist_ok=True)
+                file_path = 'datasets/spam.csv'
+                
+                if not os.path.exists(file_path):
+                    import urllib.request
+                    print("Скачивание датасета SpamBase...")
+                    url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/spambase/spambase.data'
+                    urllib.request.urlretrieve(url, file_path)
+                    
+                # Загрузка и обработка
+                column_names = [f'word_freq_{i}' for i in range(48)] + \
+                            [f'char_freq_{i}' for i in range(6)] + \
+                            ['capital_run_length_average', 'capital_run_length_longest', 'capital_run_length_total', 'spam']
+                            
+                df = pd.read_csv(file_path, header=None, names=column_names)
+                
+                self.X = df.iloc[:, :-1].values
+                self.y = df.iloc[:, -1].values
+                self.feature_names = df.columns[:-1].tolist()
+                self.target_names = ['Не спам', 'Спам']
+                
+                print(f"Загружен набор данных SpamBase: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+            except Exception as e:
+                print(f"Ошибка при загрузке SpamBase: {e}")
+
+        elif self.dataset_name == "mushroom":
+            try:
+                import pandas as pd
+                import os
+                import numpy as np
+                from sklearn.preprocessing import LabelEncoder
+                
+                # Скачивание и загрузка
+                os.makedirs('datasets', exist_ok=True)
+                file_path = 'datasets/mushroom.csv'
+                
+                if not os.path.exists(file_path):
+                    import urllib.request
+                    print("Скачивание датасета Mushroom...")
+                    url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/mushroom/agaricus-lepiota.data'
+                    urllib.request.urlretrieve(url, file_path)
+                    
+                # Загрузка и обработка
+                column_names = ['class', 'cap-shape', 'cap-surface', 'cap-color', 'bruises', 'odor',
+                            'gill-attachment', 'gill-spacing', 'gill-size', 'gill-color',
+                            'stalk-shape', 'stalk-root', 'stalk-surface-above-ring',
+                            'stalk-surface-below-ring', 'stalk-color-above-ring',
+                            'stalk-color-below-ring', 'veil-type', 'veil-color',
+                            'ring-number', 'ring-type', 'spore-print-color',
+                            'population', 'habitat']
+                            
+                df = pd.read_csv(file_path, header=None, names=column_names)
+                
+                # Кодирование целевой переменной: e = съедобный (0), p = ядовитый (1)
+                df['class'] = (df['class'] == 'p').astype(int)
+                
+                # Кодирование категориальных признаков
+                X_encoded = pd.get_dummies(df.drop('class', axis=1), drop_first=True)
+                
+                self.X = X_encoded.values
+                self.y = df['class'].values
+                self.feature_names = X_encoded.columns.tolist()
+                self.target_names = ['Съедобный', 'Ядовитый']
+                
+                print(f"Загружен набор данных Mushroom: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+            except Exception as e:
+                print(f"Ошибка при загрузке Mushroom: {e}")
 
         # Загрузка внешнего набора данных
         elif self.dataset_path is not None:
@@ -5428,6 +5504,7 @@ class NoisyDataClassificationApp:
         ttk.Radiobutton(basic_frame, text="Waveform (волны)", variable=self.dataset_var, value="waveform").pack(anchor=tk.W, padx=10, pady=2)
         ttk.Radiobutton(basic_frame, text="Wine Quality (качество вина)", variable=self.dataset_var, value="wine_quality").pack(anchor=tk.W, padx=10, pady=2)
         ttk.Radiobutton(basic_frame, text="Glass (стекло)", variable=self.dataset_var, value="glass").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(basic_frame, text="Mushroom Dataset (Грибы)", variable=self.dataset_var, value="mushroom").pack(anchor=tk.W, padx=10, pady=2)
 
         # Медицинские датасеты
         ttk.Radiobutton(medical_frame, text="Breast Cancer (рак груди)", variable=self.dataset_var, value="breast_cancer").pack(anchor=tk.W, padx=10, pady=2)
@@ -5445,6 +5522,7 @@ class NoisyDataClassificationApp:
         ttk.Radiobutton(tech_frame, text="Sonar (сонар)", variable=self.dataset_var, value="sonar").pack(anchor=tk.W, padx=10, pady=2)
         ttk.Radiobutton(tech_frame, text="Ionosphere (ионосфера)", variable=self.dataset_var, value="ionosphere").pack(anchor=tk.W, padx=10, pady=2)
         ttk.Radiobutton(tech_frame, text="Electrical Grid (стабильность сети)", variable=self.dataset_var, value="electrical_grid").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(tech_frame, text="Spam Base (Спам-фильтр)", variable=self.dataset_var, value="spam").pack(anchor=tk.W, padx=10, pady=2)
     
         # Кнопка для загрузки пользовательского набора данных
         custom_dataset_frame = ttk.LabelFrame(dataset_frame, text="Пользовательский набор данных:")
