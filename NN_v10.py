@@ -5,19 +5,13 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, regularizers
-from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
-from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Dropout, BatchNormalization, Input, LeakyReLU, Activation, GaussianNoise
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras import backend as K
-from sklearn.datasets import load_iris, load_wine, load_breast_cancer, fetch_openml
-from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.preprocessing import RobustScaler
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, AdaBoostClassifier, ExtraTreesClassifier
-from sklearn.svm import SVC
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.feature_selection import SelectKBest, f_classif
 import pickle
 import os
 import warnings
@@ -26,9 +20,6 @@ from tkinter import ttk, filedialog, messagebox
 from scipy import stats
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import joblib
-import xgboost as xgb
-import lightgbm as lgb
-from imblearn.combine import SMOTETomek
 
 # Отключение предупреждений для более чистого вывода
 warnings.filterwarnings('ignore')
@@ -3755,327 +3746,641 @@ class ExperimentRunner:
         self.current_ensemble = None
         
     def load_dataset(self, dataset_name=None, dataset_path=None):
-        """Загружает набор данных
-        
-        Args:
-            dataset_name: Название набора данных из sklearn (если используется встроенный набор)
-            dataset_path: Путь к файлу с набором данных (если используется внешний набор)
-            
-        Returns:
-            X: Признаки
-            y: Метки классов
-        """
+        """Загружает набор данных с обработкой ошибок и конвертацией типов"""
         if dataset_name is not None:
             self.dataset_name = dataset_name
         if dataset_path is not None:
             self.dataset_path = dataset_path
             
-        # Загрузка встроенных наборов данных
-        if self.dataset_name == 'iris':
+        # Обработка основных датасетов из scikit-learn
+        if self.dataset_name == "iris":
+            from sklearn.datasets import load_iris
             data = load_iris()
-            self.X = data.data
+            self.X = data.data.astype(np.float32)  # Явное преобразование в float32
             self.y = data.target
             self.feature_names = data.feature_names
             self.target_names = data.target_names
             print(f"Загружен набор данных Iris: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
             
-        elif self.dataset_name == 'wine':
+        elif self.dataset_name == "wine":
+            from sklearn.datasets import load_wine
             data = load_wine()
-            self.X = data.data
+            self.X = data.data.astype(np.float32)
             self.y = data.target
             self.feature_names = data.feature_names
             self.target_names = data.target_names
             print(f"Загружен набор данных Wine: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
-        
-        elif self.dataset_name == 'vehicle':
-            vehicle = fetch_openml(name='vehicle', version=1, parser='auto')
-            self.X = vehicle.data.values
-            self.y = np.unique(vehicle.target, return_inverse=True)[1]
-            self.feature_names = vehicle.feature_names
-            self.target_names = np.unique(vehicle.target).tolist()
-            print(f"Загружен набор данных Vehicle: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
-
-        elif self.dataset_name == 'breast_cancer':
+            
+        elif self.dataset_name == "breast_cancer":
+            from sklearn.datasets import load_breast_cancer
             data = load_breast_cancer()
-            self.X = data.data
-            self.y = data.target
+            self.X = data.data  # Не меняем тип данных
+            self.y = data.target  # Не приводим к float32, оставляем как int
             self.feature_names = data.feature_names
             self.target_names = data.target_names
             print(f"Загружен набор данных Breast Cancer: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
             
-        elif self.dataset_name == 'digits':
-            data = fetch_openml('mnist_784', version=1, parser='auto')
-            # Для ускорения используем только часть набора данных MNIST
-            n_samples = 5000
-            self.X = data.data[:n_samples].astype(float).values
-            self.y = data.target[:n_samples].astype(int).values
-            self.feature_names = [f"pixel_{i}" for i in range(self.X.shape[1])]
+        elif self.dataset_name == "digits":
+            # Классификация рукописных цифр (высокая размерность)
+            from sklearn.datasets import load_digits
+            data = load_digits()
+            self.X = data.data.astype(np.float32)
+            self.y = data.target
+            self.feature_names = [f"pixel_{i}" for i in range(data.data.shape[1])]
             self.target_names = [str(i) for i in range(10)]
-            print(f"Загружен набор данных MNIST (подвыборка): {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+            print(f"Загружен набор данных Digits: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
             
-        elif self.dataset_name == 'diabetes':
+        elif self.dataset_name == "wine_quality":
+            # Качество вина (более сложная задача, чем стандартная)
+            try:
+                import pandas as pd
+                import os
+                
+                # Проверяем, существует ли папка для датасетов
+                os.makedirs('datasets', exist_ok=True)
+                
+                # URL для скачивания
+                url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-red.csv'
+                
+                # Путь для сохранения файла
+                file_path = 'datasets/winequality-red.csv'
+                
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Wine Quality...")
+                    urllib.request.urlretrieve(url, file_path)
+                
+                # Загружаем данные из CSV
+                df = pd.read_csv(file_path, sep=';')
+                
+                # Преобразуем регрессионную задачу в классификацию
+                quality = df['quality'].values
+                # 3 класса: низкое (<=5), среднее (6), высокое (>=7) качество
+                y_class = np.zeros_like(quality, dtype=int)
+                y_class[quality <= 5] = 0
+                y_class[(quality > 5) & (quality < 7)] = 1
+                y_class[quality >= 7] = 2
+                
+                self.X = df.drop('quality', axis=1).values.astype(np.float32)
+                self.y = y_class
+                self.feature_names = df.drop('quality', axis=1).columns.tolist()
+                self.target_names = ['Низкое качество', 'Среднее качество', 'Высокое качество']
+                print(f"Загружен набор данных Wine Quality: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                
+            except Exception as e:
+                print(f"Ошибка при загрузке Wine Quality: {e}")
+        
+        elif self.dataset_name == "diabetes":
             from sklearn.datasets import load_diabetes
             data = load_diabetes()
-            self.X = data.data
-            # Преобразуем регрессионную задачу в классификацию
-            self.y = (data.target > np.median(data.target)).astype(int)
+            self.X = data.data  # Оставляем как есть
+            # Преобразуем регрессионную задачу в классификацию с целочисленными метками
+            self.y = (data.target > np.median(data.target)).astype(int)  # Используем int, не float32
             self.feature_names = data.feature_names
             self.target_names = ['Нормальный', 'Диабет']
             print(f"Загружен набор данных Diabetes: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
-    
-        elif self.dataset_name == 'heart_disease':
-            # Используем стабильную версию датасета сердечных заболеваний из UCI репозитория
-            heart = fetch_openml(name='heart-statlog', version=1, parser='auto', as_frame=True)
-            
-            # Убедимся, что данные в правильном формате
-            X = heart.data.values if hasattr(heart.data, 'values') else np.array(heart.data)
-            y = heart.target.values if hasattr(heart.target, 'values') else np.array(heart.target)
-            
-            # Явное преобразование типов для избежания проблем
-            X = X.astype(np.float64)
-            
-            # Преобразуем метки в целочисленный формат 0/1
-            if y.dtype.kind in ['U', 'S', 'O']:  # Если метки строковые или объекты
-                from sklearn.preprocessing import LabelEncoder
-                le = LabelEncoder()
-                y = le.fit_transform(y)
-            else:
-                # Если уже числовые, убедимся, что они начинаются с 0
-                if np.min(y) > 0:
-                    y = y - np.min(y)
-            
-            # Масштабируем признаки для лучшей работы моделей
-            from sklearn.preprocessing import StandardScaler
-            X = StandardScaler().fit_transform(X)
-            
-            self.X = X
-            self.y = y
-            self.feature_names = heart.feature_names
-            self.target_names = ['Нет заболевания', 'Есть заболевание']
-            print(f"Загружен набор данных Heart Disease: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
         
-        elif self.dataset_name == 'wine_quality':
-            # Заменить код для wine_quality на этот:
-            from sklearn.datasets import fetch_openml
+        elif self.dataset_name == "heart_disease":
             try:
-                # Пробуем получить датасет с правильным именем
-                wine_quality = fetch_openml(name='wine-quality-red', version=1, parser='auto')
-                self.X = np.array(wine_quality.data)
-                # Преобразуем регрессионную задачу в классификацию
-                quality = wine_quality.target.astype(float)
-                # Классы: низкое (<=5), среднее (6), высокое (>=7) качество
-                y_class = np.zeros_like(quality, dtype=int)
-                y_class[quality <= 5] = 0  # низкое
-                y_class[(quality > 5) & (quality < 7)] = 1  # среднее
-                y_class[quality >= 7] = 2  # высокое
+                import pandas as pd
+                import os
                 
-                self.y = y_class
-                self.feature_names = wine_quality.feature_names
-                self.target_names = ['Низкое качество', 'Среднее качество', 'Высокое качество']
-                print(f"Загружен набор данных Wine Quality: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                # Проверяем, существует ли папка для датасетов
+                os.makedirs('datasets', exist_ok=True)
+                
+                # URL для скачивания
+                url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/processed.cleveland.data'
+                
+                # Путь для сохранения файла
+                file_path = 'datasets/heart_disease.csv'
+                
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Heart Disease...")
+                    urllib.request.urlretrieve(url, file_path)
+                
+                # Загружаем данные из CSV
+                column_names = ['age', 'sex', 'cp', 'trestbps', 'chol', 'fbs', 'restecg', 
+                            'thalach', 'exang', 'oldpeak', 'slope', 'ca', 'thal', 'target']
+                df = pd.read_csv(file_path, header=None, names=column_names)
+                
+                # Заменяем строки '?' на NaN и заполняем пропуски
+                df = df.replace('?', np.nan)
+                
+                # Преобразуем все столбцы в числовой тип
+                for col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                
+                # Заполняем пропуски медианами
+                df = df.fillna(df.median())
+                
+                # Бинаризуем целевую переменную (0 = нет заболевания, 1 = заболевание)
+                df['target'] = (df['target'] > 0).astype(int)  # Используем int, не float32
+                
+                self.X = df.drop('target', axis=1).values
+                self.y = df['target'].values
+                self.feature_names = df.drop('target', axis=1).columns.tolist()
+                self.target_names = ['Нет заболевания', 'Есть заболевание']
+                print(f"Загружен набор данных Heart Disease: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                
             except Exception as e:
-                # Если не удалось, загружаем из локального URL или UCI репозитория
-                import pandas as pd
-                from sklearn.preprocessing import StandardScaler
-                
-                try:
-                    # URL к датасету UCI
-                    url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/wine-quality/winequality-red.csv'
-                    wine_df = pd.read_csv(url, sep=';')
-                    
-                    # Преобразуем в X и y
-                    X = wine_df.drop('quality', axis=1).values
-                    quality = wine_df['quality'].values
-                    
-                    # Классифицируем качество
-                    y_class = np.zeros_like(quality, dtype=int)
-                    y_class[quality <= 5] = 0  # низкое
-                    y_class[(quality > 5) & (quality < 7)] = 1  # среднее
-                    y_class[quality >= 7] = 2  # высокое
-                    
-                    # Нормализуем признаки
-                    X = StandardScaler().fit_transform(X)
-                    
-                    self.X = X
-                    self.y = y_class
-                    self.feature_names = wine_df.columns[:-1].tolist()
-                    self.target_names = ['Низкое качество', 'Среднее качество', 'Высокое качество']
-                    print(f"Загружен набор данных Wine Quality из UCI: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
-                except Exception as err:
-                    raise ValueError(f"Ошибка при загрузке Wine Quality: {err}")
+                print(f"Ошибка при загрузке Heart Disease: {e}")
+            
+        elif self.dataset_name == "waveform":
+            # Датасет синтетических волн (высокая размерность, шумные данные)
+            from sklearn.datasets import make_classification
+            X, y = make_classification(n_samples=5000, n_features=40, n_classes=3, n_informative=30, 
+                                    n_redundant=10, n_clusters_per_class=2, random_state=42)
+            self.X = X  # Не меняем тип данных для X
+            self.y = y  # Здесь уже будет int64 по умолчанию
+            self.feature_names = [f"feature_{i}" for i in range(X.shape[1])]
+            self.target_names = [f"Wave {i}" for i in range(3)]
+            print(f"Загружен набор данных Waveform: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
         
-        elif self.dataset_name == 'vehicle':
-            vehicle = fetch_openml(name='vehicle', version=1, parser='auto')
-            self.X = vehicle.data.values
-            self.y = np.unique(vehicle.target, return_inverse=True)[1]
-            self.feature_names = vehicle.feature_names
-            self.target_names = np.unique(vehicle.target).tolist()
-            print(f"Загружен набор данных Vehicle: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
-        
-        elif self.dataset_name == 'titanic':
+        elif self.dataset_name == "haberman":
             try:
                 import pandas as pd
-                from sklearn.preprocessing import LabelEncoder, StandardScaler
+                import os
                 
-                # Загружаем датасет Titanic из seaborn
-                import seaborn as sns
-                titanic = sns.load_dataset('titanic')
+                # Создаем директорию для датасетов, если не существует
+                os.makedirs('datasets', exist_ok=True)
                 
-                # Предобработка данных
-                # Выбираем нужные признаки
-                features = ['pclass', 'sex', 'age', 'sibsp', 'parch', 'fare', 'embarked']
-                df = titanic[features + ['survived']].copy()
+                # Путь для сохранения файла
+                file_path = 'datasets/haberman.csv'
                 
-                # Заполняем пропуски
-                df['age'] = df['age'].fillna(df['age'].median())
-                df['embarked'] = df['embarked'].fillna(df['embarked'].mode()[0])
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Haberman's Survival...")
+                    url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/haberman/haberman.data'
+                    urllib.request.urlretrieve(url, file_path)
+                
+                # Загружаем данные из CSV
+                column_names = ['age', 'year_operation', 'axillary_nodes', 'survival_status']
+                df = pd.read_csv(file_path, header=None, names=column_names)
+                
+                # Выделяем признаки и метки: 1 = выжил 5+ лет, 2 = умер в течение 5 лет
+                X = df.drop('survival_status', axis=1).values
+                y = df['survival_status'].values - 1  # Приводим к 0, 1
+                
+                self.X = X
+                self.y = y.astype(np.int64)
+                self.feature_names = df.drop('survival_status', axis=1).columns.tolist()
+                self.target_names = ['Выжил > 5 лет', 'Умер в течение 5 лет']
+                print(f"Загружен набор данных Haberman's Survival: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                
+            except Exception as e:
+                # Если что-то пошло не так, загружаем запасной датасет
+                from sklearn.datasets import load_breast_cancer
+                data = load_breast_cancer()
+                self.X = data.data
+                self.y = data.target
+                self.feature_names = data.feature_names
+                self.target_names = data.target_names
+                print(f"Ошибка при загрузке Haberman's Survival: {e}")
+                print(f"Загружен запасной набор данных Breast Cancer: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+
+        elif self.dataset_name == "bank_churn":
+            try:
+                import pandas as pd
+                import os
+                
+                # Создаем директорию для датасетов, если не существует
+                os.makedirs('datasets', exist_ok=True)
+                
+                # Путь для сохранения файла
+                file_path = 'datasets/bank_churn.csv'
+                
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Bank Customer Churn...")
+                    url = 'https://raw.githubusercontent.com/shrikant-temburwar/Bank-Customer-Churn-Prediction/master/Churn_Modelling.csv'
+                    urllib.request.urlretrieve(url, file_path)
+                
+                # Загружаем данные из CSV
+                df = pd.read_csv(file_path)
+                
+                # Удаляем ненужные столбцы
+                df = df.drop(['RowNumber', 'CustomerId', 'Surname'], axis=1)
                 
                 # Кодируем категориальные признаки
-                label_encoders = {}
-                for col in ['sex', 'embarked']:
-                    label_encoders[col] = LabelEncoder()
-                    df[col] = label_encoders[col].fit_transform(df[col])
+                from sklearn.preprocessing import LabelEncoder
                 
-                # Извлекаем признаки и метки
-                X = df.drop('survived', axis=1).values
-                y = df['survived'].values
+                # Бинарная кодировка для Gender
+                df['Gender'] = (df['Gender'] == 'Male').astype(int)
+                
+                # Label Encoding для Geography
+                le_geo = LabelEncoder()
+                df['Geography'] = le_geo.fit_transform(df['Geography'])
+                
+                # Выделяем признаки и метки
+                X = df.drop('Exited', axis=1).values
+                y = df['Exited'].values
+                
+                self.X = X
+                self.y = y.astype(np.int64)
+                self.feature_names = df.drop('Exited', axis=1).columns.tolist()
+                self.target_names = ['Остался клиентом', 'Ушел из банка']
+                print(f"Загружен набор данных Bank Customer Churn: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                
+            except Exception as e:
+                # Если что-то пошло не так, загружаем запасной датасет
+                from sklearn.datasets import load_breast_cancer
+                data = load_breast_cancer()
+                self.X = data.data
+                self.y = data.target
+                self.feature_names = data.feature_names
+                self.target_names = data.target_names
+                print(f"Ошибка при загрузке Bank Customer Churn: {e}")
+                print(f"Загружен запасной набор данных Breast Cancer: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+
+        elif self.dataset_name == "electrical_grid":
+            try:
+                import pandas as pd
+                import os
+                import numpy as np
+                
+                # Создаем директорию для датасетов, если не существует
+                os.makedirs('datasets', exist_ok=True)
+                
+                # Путь для сохранения файла
+                file_path = 'datasets/electrical_grid.csv'
+                
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Electrical Grid Stability...")
+                    url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00471/Data_for_UCI_named.csv'
+                    urllib.request.urlretrieve(url, file_path)
+                
+                # Загружаем данные из CSV
+                df = pd.read_csv(file_path)
+                
+                # Преобразуем категориальную метку в числовую
+                # 'stable' -> 0, 'unstable' -> 1
+                if 'stabf' in df.columns:
+                    # Проверяем тип данных
+                    if df['stabf'].dtype == 'object':  # если строковые значения
+                        y = (df['stabf'] == 'unstable').astype(np.int64)
+                        X = df.drop('stabf', axis=1).values
+                    else:  # если числовые значения
+                        # Проверяем, может быть это уже числа
+                        try:
+                            df['stabf'] = pd.to_numeric(df['stabf'])
+                            # Определяем порог на основе данных (если это числовые значения)
+                            threshold = 0.1
+                            y = (df['stabf'] > threshold).astype(np.int64)
+                            X = df.drop('stabf', axis=1).values
+                        except:
+                            # Если не удалось преобразовать, считаем, что это категориальные данные
+                            mapping = {'stable': 0, 'unstable': 1}
+                            y = df['stabf'].map(mapping).astype(np.int64)
+                            X = df.drop('stabf', axis=1).values
+                else:
+                    # Если столбец называется не 'stabf', ищем его по другому имени
+                    target_col = None
+                    for col in df.columns:
+                        if 'stab' in col.lower():
+                            target_col = col
+                            break
+                    
+                    if target_col:
+                        # Если нашли столбец с 'stab' в имени, используем его
+                        mapping = {'stable': 0, 'unstable': 1}
+                        y = df[target_col].map(mapping).fillna(0).astype(np.int64)
+                        X = df.drop(target_col, axis=1).values
+                    else:
+                        # Если целевая переменная не найдена, пробуем использовать последний столбец
+                        target_col = df.columns[-1]
+                        if df[target_col].dtype == 'object':
+                            mapping = {'stable': 0, 'unstable': 1}
+                            y = df[target_col].map(mapping).fillna(0).astype(np.int64)
+                        else:
+                            y = (df[target_col] > df[target_col].median()).astype(np.int64)
+                        
+                        X = df.drop(target_col, axis=1).values
+                
+                # Преобразуем все оставшиеся признаки в числовой формат
+                # (на случай, если есть еще категориальные)
+                for i in range(X.shape[1]):
+                    if not np.issubdtype(X[:, i].dtype, np.number):
+                        try:
+                            X[:, i] = pd.to_numeric(X[:, i], errors='coerce')
+                        except:
+                            # Если не удается преобразовать, заменяем медианой
+                            X[:, i] = np.zeros(X.shape[0])
+                
+                # Заполняем пропущенные значения
+                X = np.nan_to_num(X)
                 
                 self.X = X
                 self.y = y
-                self.feature_names = df.drop('survived', axis=1).columns.tolist()
-                self.target_names = ['Не выжил', 'Выжил']
-                print(f"Загружен набор данных Titanic: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
-            except Exception as e:
-                raise ValueError(f"Ошибка при загрузке Titanic: {e}")
-            
-        elif self.dataset_name == 'sonar':
-            try:
-                from sklearn.preprocessing import StandardScaler
                 
-                # Загружаем датасет напрямую из UCI
+                # Получаем названия признаков
+                if 'stabf' in df.columns:
+                    self.feature_names = df.drop('stabf', axis=1).columns.tolist()
+                else:
+                    self.feature_names = [f'feature_{i+1}' for i in range(X.shape[1])]
+                    
+                self.target_names = ['Стабильная', 'Нестабильная']
+                print(f"Загружен набор данных Electrical Grid Stability: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                
+            except Exception as e:
+                print(f"Ошибка при загрузке Electrical Grid Stability: {e}")
+
+        elif self.dataset_name == "banknote":
+            try:
                 import pandas as pd
+                import os
+                
+                # Проверяем, существует ли папка для датасетов
+                os.makedirs('datasets', exist_ok=True)
+                
+                # URL для скачивания
+                url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/00267/data_banknote_authentication.txt'
+                
+                # Путь для сохранения файла
+                file_path = 'datasets/banknote.csv'
+                
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Banknote Authentication...")
+                    urllib.request.urlretrieve(url, file_path)
+                
+                # Загружаем данные из CSV
+                column_names = ['variance', 'skewness', 'curtosis', 'entropy', 'class']
+                df = pd.read_csv(file_path, header=None, names=column_names)
+                
+                # Разделяем признаки и метку класса
+                X = df.drop('class', axis=1).values  # Оставляем тип по умолчанию
+                y = df['class'].values.astype(np.int64)  # Явно указываем int64
+                
+                self.X = X
+                self.y = y
+                self.feature_names = df.drop('class', axis=1).columns.tolist()
+                self.target_names = ['Фальшивая', 'Настоящая']
+                print(f"Загружен набор данных Banknote Authentication: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                
+            except Exception as e:
+                print(f"Ошибка при загрузке Banknote: {e}")
+        
+        elif self.dataset_name == "ionosphere":
+            try:
+                import pandas as pd
+                import os
+                
+                # Проверяем, существует ли папка для датасетов
+                os.makedirs('datasets', exist_ok=True)
+                
+                # URL для скачивания
+                url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/ionosphere/ionosphere.data'
+                
+                # Путь для сохранения файла
+                file_path = 'datasets/ionosphere.csv'
+                
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Ionosphere...")
+                    urllib.request.urlretrieve(url, file_path)
+                
+                # Загружаем данные из CSV
+                column_names = [f'feature_{i}' for i in range(34)] + ['class']
+                df = pd.read_csv(file_path, header=None, names=column_names)
+                
+                # Преобразуем метки классов: 'g' (хорошая) -> 1, 'b' (плохая) -> 0
+                y_values = df['class'].map({'g': 1, 'b': 0}).values.astype(np.int64)  # Явно указываем int64
+                X_values = df.drop('class', axis=1).values
+                
+                self.X = X_values
+                self.y = y_values
+                self.feature_names = df.drop('class', axis=1).columns.tolist()
+                self.target_names = ['Плохая структура', 'Хорошая структура']
+                print(f"Загружен набор данных Ionosphere (Радарные сигналы): {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                
+            except Exception as e:
+                print(f"Ошибка при загрузке Ionosphere: {e}")
+        
+        elif self.dataset_name == "parkinsons":
+            try:
+                import pandas as pd
+                import os
+                
+                # Проверяем, существует ли папка для датасетов
+                os.makedirs('datasets', exist_ok=True)
+                
+                # URL для скачивания
+                url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/parkinsons/parkinsons.data'
+                
+                # Путь для сохранения файла
+                file_path = 'datasets/parkinsons.csv'
+                
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Parkinsons...")
+                    urllib.request.urlretrieve(url, file_path)
+                
+                # Загружаем данные из CSV
+                df = pd.read_csv(file_path)
+                
+                # Удаляем столбец с именем
+                if 'name' in df.columns:
+                    df = df.drop('name', axis=1)
+                
+                # Выделяем целевую переменную (status)
+                y = df['status'].values
+                X = df.drop('status', axis=1).values
+                
+                self.X = X
+                self.y = y.astype(int)  # Приводим к int, не к float32
+                self.feature_names = df.drop('status', axis=1).columns.tolist()
+                self.target_names = ['Здоров', 'Болен Паркинсоном']
+                print(f"Загружен набор данных Parkinsons: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                
+            except Exception as e:
+                print(f"Ошибка при загрузке Parkinsons: {e}")
+        
+        elif self.dataset_name == "sonar":
+            try:
+                import pandas as pd
+                import os
+                
+                # Проверяем, существует ли папка для датасетов
+                os.makedirs('datasets', exist_ok=True)
+                
+                # URL для скачивания
                 url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/undocumented/connectionist-bench/sonar/sonar.all-data'
                 
-                # Загружаем датасет без заголовков
-                df = pd.read_csv(url, header=None)
+                # Путь для сохранения файла
+                file_path = 'datasets/sonar.csv'
                 
-                # Последний столбец содержит метки классов (M для mines, R для rocks)
-                X = df.iloc[:, :-1].values
-                # Стандартизируем признаки
-                X = StandardScaler().fit_transform(X)
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Sonar...")
+                    urllib.request.urlretrieve(url, file_path)
                 
-                # Преобразуем метки в целочисленные (0 для R, 1 для M)
-                y = (df.iloc[:, -1] == 'M').astype(int).values
+                # Загружаем данные из CSV
+                column_names = [f'feature_{i}' for i in range(60)] + ['class']
+                df = pd.read_csv(file_path, header=None, names=column_names)
                 
-                self.X = X
-                self.y = y
+                # Преобразуем метки классов: 'M' (мина) -> 1, 'R' (камень) -> 0
+                y_values = df['class'].map({'M': 1, 'R': 0}).values.astype(np.int64)  # Явно указываем int64
+                X_values = df.drop('class', axis=1).values
                 
-                # Создаем имена признаков
-                self.feature_names = [f'feature_{i+1}' for i in range(X.shape[1])]
-                self.target_names = ['Rock', 'Mine']
+                self.X = X_values
+                self.y = y_values
+                self.feature_names = df.drop('class', axis=1).columns.tolist()
+                self.target_names = ['Камень', 'Мина']
+                print(f"Загружен набор данных Sonar (Мина/Камень): {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
                 
-                print(f"Загружен набор данных Sonar: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
             except Exception as e:
-                raise ValueError(f"Ошибка при загрузке Sonar: {e}")
-            
-        elif self.dataset_name == 'glass':
+                print(f"Ошибка при загрузке Sonar: {e}")
+        
+        elif self.dataset_name == "credit_risk":
             try:
-                # Полностью переработанная загрузка датасета стекла
-                from sklearn.preprocessing import StandardScaler, LabelEncoder
                 import pandas as pd
+                import os
                 
-                # Загружаем датасет напрямую из UCI
-                url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/glass/glass.data'
-                columns = ['id', 'RI', 'Na', 'Mg', 'Al', 'Si', 'K', 'Ca', 'Ba', 'Fe', 'glass_type']
-                glass_df = pd.read_csv(url, names=columns, index_col=0)
+                # Проверяем, существует ли папка для датасетов
+                os.makedirs('datasets', exist_ok=True)
                 
-                # Проверяем распределение классов
-                class_counts = glass_df['glass_type'].value_counts()
-                print("Распределение классов в датасете Glass:")
-                for cls, count in class_counts.items():
-                    print(f"  Класс {cls}: {count} образцов")
+                # Путь для сохранения файла
+                file_path = 'datasets/credit_risk.csv'
                 
-                # Объединяем редкие классы, чтобы избежать проблем с SMOTE
-                # Классы '3' и '4' - это оконные стекла для транспорта, можно объединить
-                if (class_counts.get(3, 0) < 10 or class_counts.get(4, 0) < 10) and 3 in class_counts and 4 in class_counts:
-                    print("Объединяем редкие классы 3 и 4 (оконные стекла для транспорта)")
-                    glass_df.loc[glass_df['glass_type'] == 4, 'glass_type'] = 3
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Credit Risk...")
+                    url = 'https://raw.githubusercontent.com/Gladiator07/Credit-Risk-Modelling/main/data/credit_risk_dataset.csv'
+                    urllib.request.urlretrieve(url, file_path)
                 
-                # Применяем LabelEncoder для переиндексации классов
-                le = LabelEncoder()
-                y = le.fit_transform(glass_df['glass_type'])
+                # Загружаем данные из CSV
+                df = pd.read_csv(file_path)
                 
-                # Извлекаем признаки и стандартизируем их
-                X = glass_df.drop('glass_type', axis=1).values
-                X = StandardScaler().fit_transform(X)
+                # Предобработка данных: удаляем строки с пропущенными значениями
+                df = df.dropna()
                 
-                self.X = X
-                self.y = y
-                self.feature_names = glass_df.columns[:-1].tolist()
-                
-                # Получаем фактические имена классов, только для имеющихся в данных
-                unique_classes = len(np.unique(y))
-                glass_types = [
-                    'building_windows_float_processed', 
-                    'building_windows_non_float_processed', 
-                    'vehicle_windows_processed',  # Объединенные классы для транспортных стекол
-                    'containers', 
-                    'tableware', 
-                    'headlamps'
-                ]
-                self.target_names = glass_types[:unique_classes]
-                print(f"Загружен набор данных Glass: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
-            except Exception as e:
-                raise ValueError(f"Ошибка при загрузке Glass: {e}")
-        
-        elif self.dataset_name == 'penguins':
-            try:
-                # Использование встроенного датасета Penguins из seaborn
-                import seaborn as sns
-                penguins = sns.load_dataset('penguins')
-                
-                # Удаляем строки с пропусками
-                penguins = penguins.dropna()
-                
-                # Обработка категориальных признаков
+                # Обрабатываем категориальные признаки
                 from sklearn.preprocessing import LabelEncoder
-                label_encoders = {}
-                for column in ['island', 'sex']:
-                    label_encoders[column] = LabelEncoder()
-                    penguins[column] = label_encoders[column].fit_transform(penguins[column])
+                cat_cols = df.select_dtypes(include=['object']).columns
                 
-                # Извлекаем признаки и метки
-                X = penguins.drop('species', axis=1).values
-                y_encoder = LabelEncoder()
-                y = y_encoder.fit_transform(penguins['species'])
+                for col in cat_cols:
+                    le = LabelEncoder()
+                    df[col] = le.fit_transform(df[col])
                 
-                self.X = X
-                self.y = y
-                self.feature_names = penguins.drop('species', axis=1).columns.tolist()
-                self.target_names = y_encoder.classes_.tolist()
-                print(f"Загружен набор данных Penguins: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                # Выделяем целевую переменную
+                y = (df['cb_person_default_on_file'] == 1).astype(int)
+                X = df.drop(['cb_person_default_on_file', 'person_id'], axis=1, errors='ignore')
+                
+                self.X = X.values
+                self.y = y.values.astype(np.int64)  # Явно указываем int64
+                self.feature_names = X.columns.tolist()
+                self.target_names = ['Кредитоспособен', 'Высокий риск']
+                print(f"Загружен набор данных Credit Risk: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                
             except Exception as e:
-                raise ValueError(f"Ошибка при загрузке Penguins: {e}")
+                print(f"Ошибка при загрузке Credit Risk: {e}")
         
-        elif self.dataset_name == 'banknote':
-            banknote = fetch_openml(name='banknote-authentication', version=1, parser='auto')
-            self.X = banknote.data.values
-            self.y = banknote.target.astype(int).values
-            self.feature_names = banknote.feature_names
-            self.target_names = ['Фальшивая', 'Настоящая']
-            print(f"Загружен набор данных Banknote Authentication: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
-        
-        elif self.dataset_name == 'biodeg':
+        elif self.dataset_name == "glass":
             try:
-                biodeg = fetch_openml(name='qsar-biodeg', version=1, parser='auto')
-                self.X = np.array(biodeg.data)
-                # Исправление: явное приведение к float32 для совместимости с Keras
-                self.y = (biodeg.target == 'RB').astype(np.float32)
-                self.feature_names = biodeg.feature_names
-                self.target_names = ['NRB', 'RB']
-                print(f"Загружен набор данных QSAR Biodegradation: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                import pandas as pd
+                import os
+                import numpy as np
+                
+                # Проверяем, существует ли папка для датасетов
+                os.makedirs('datasets', exist_ok=True)
+                
+                # URL для скачивания
+                url = 'https://archive.ics.uci.edu/ml/machine-learning-databases/glass/glass.data'
+                
+                # Путь для сохранения файла
+                file_path = 'datasets/glass.csv'
+                
+                # Проверяем, существует ли файл
+                if not os.path.exists(file_path):
+                    # Если файл не существует, скачиваем его
+                    import urllib.request
+                    print(f"Скачивание датасета Glass...")
+                    urllib.request.urlretrieve(url, file_path)
+                
+                # Загружаем данные из CSV
+                column_names = ['id', 'ri', 'na', 'mg', 'al', 'si', 'k', 'ca', 'ba', 'fe', 'type']
+                df = pd.read_csv(file_path, header=None, names=column_names)
+                
+                # Удаляем столбец id
+                df = df.drop('id', axis=1)
+                
+                # ВАЖНОЕ ИСПРАВЛЕНИЕ: Проверяем и определяем правильное количество классов
+                original_classes = np.unique(df['type'])
+                print(f"Оригинальные классы в датасете Glass: {original_classes}")
+                
+                # Преобразуем тип в диапазон [0, n_classes-1]
+                # Для этого создаем новый маппинг, который сохраняет последовательность
+                class_mapping = {original: i for i, original in enumerate(original_classes)}
+                df['type_mapped'] = df['type'].map(class_mapping)
+                
+                # Проверяем, что у нас достаточно образцов каждого класса для SMOTE
+                class_counts = df['type_mapped'].value_counts()
+                
+                # Если есть классы с малым количеством образцов, объединяем их
+                if class_counts.min() < 6:
+                    print(f"Обнаружены классы с малым числом образцов. Преобразуем задачу...")
+                    
+                    # Преобразуем в бинарную классификацию: стекло для окон (1,2) против остальных типов
+                    df['type_binary'] = df['type'].apply(lambda x: 1 if x in [1, 2] else 0)
+                    
+                    self.X = df.drop(['type', 'type_mapped', 'type_binary'], axis=1).values
+                    self.y = df['type_binary'].values
+                    self.feature_names = df.drop(['type', 'type_mapped', 'type_binary'], axis=1).columns.tolist()
+                    self.target_names = ['Не оконное стекло', 'Оконное стекло']
+                    
+                    print(f"Датасет преобразован в бинарную классификацию: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                else:
+                    # Если у всех классов достаточно образцов, используем многоклассовую классификацию
+                    self.X = df.drop(['type', 'type_mapped'], axis=1).values
+                    self.y = df['type_mapped'].values
+                    self.feature_names = df.drop(['type', 'type_mapped'], axis=1).columns.tolist()
+                    
+                    # Названия типов стекла с корректным количеством
+                    glass_types = []
+                    for i in range(len(original_classes)):
+                        if i == 0:
+                            glass_types.append('оконное стекло (здание)')
+                        elif i == 1:
+                            glass_types.append('оконное стекло (не здание)')
+                        elif i == 2:
+                            glass_types.append('автомобильное стекло')
+                        elif i == 3:
+                            glass_types.append('контейнерное стекло')
+                        elif i == 4:
+                            glass_types.append('посуда')
+                        elif i == 5:
+                            glass_types.append('фары')
+                        else:
+                            glass_types.append(f'тип стекла {i+1}')
+                    
+                    self.target_names = glass_types
+                
+                print(f"Загружен набор данных Glass: {self.X.shape[0]} образцов, {self.X.shape[1]} признаков, {len(np.unique(self.y))} классов")
+                
             except Exception as e:
-                raise ValueError(f"Ошибка при загрузке Biodegradation: {e}")
+                print(f"Ошибка при загрузке Glass: {e}")
 
         # Загрузка внешнего набора данных
         elif self.dataset_path is not None:
@@ -5093,24 +5398,53 @@ class NoisyDataClassificationApp:
         self.dataset_var = tk.StringVar(value="iris")
 
         # Создаем вложенные фреймы для лучшей организации
-        builtin_datasets_frame = ttk.LabelFrame(dataset_frame, text="Встроенные наборы данных:")
+        builtin_datasets_frame = ttk.LabelFrame(dataset_frame, text="Встроенные наборы данных")
         builtin_datasets_frame.pack(fill=tk.X, padx=2, pady=2)
 
-        # Классические датасеты (которые работают)
-        ttk.Radiobutton(builtin_datasets_frame, text="Iris", variable=self.dataset_var, value="iris").grid(row=0, column=0, sticky=tk.W, padx=5)
-        ttk.Radiobutton(builtin_datasets_frame, text="Wine", variable=self.dataset_var, value="wine").grid(row=0, column=1, sticky=tk.W, padx=5)
-        ttk.Radiobutton(builtin_datasets_frame, text="Breast Cancer", variable=self.dataset_var, value="breast_cancer").grid(row=1, column=0, sticky=tk.W, padx=5)
-        ttk.Radiobutton(builtin_datasets_frame, text="Diabetes", variable=self.dataset_var, value="diabetes").grid(row=1, column=1, sticky=tk.W, padx=5)
+        # Создаем вкладки для категорий датасетов
+        datasets_notebook = ttk.Notebook(builtin_datasets_frame)
+        datasets_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # Исправленные и новые датасеты
-        ttk.Radiobutton(builtin_datasets_frame, text="Heart Disease", variable=self.dataset_var, value="heart_disease").grid(row=2, column=0, sticky=tk.W, padx=5)
-        ttk.Radiobutton(builtin_datasets_frame, text="Penguins", variable=self.dataset_var, value="penguins").grid(row=2, column=1, sticky=tk.W, padx=5)
-        ttk.Radiobutton(builtin_datasets_frame, text="Wine Quality", variable=self.dataset_var, value="wine_quality").grid(row=3, column=0, sticky=tk.W, padx=5)
-        ttk.Radiobutton(builtin_datasets_frame, text="Titanic", variable=self.dataset_var, value="titanic").grid(row=3, column=1, sticky=tk.W, padx=5)
-        ttk.Radiobutton(builtin_datasets_frame, text="Sonar", variable=self.dataset_var, value="sonar").grid(row=4, column=0, sticky=tk.W, padx=5)
-        ttk.Radiobutton(builtin_datasets_frame, text="Glass", variable=self.dataset_var, value="glass").grid(row=4, column=1, sticky=tk.W, padx=5)
-        ttk.Radiobutton(builtin_datasets_frame, text="QSAR Biodeg", variable=self.dataset_var, value="biodeg").grid(row=5, column=0, sticky=tk.W, padx=5)
-        ttk.Radiobutton(builtin_datasets_frame, text="vehicle", variable=self.dataset_var, value="vehicle").grid(row=5, column=1, sticky=tk.W, padx=5)
+        # Базовые датасеты
+        basic_frame = ttk.Frame(datasets_notebook)
+        datasets_notebook.add(basic_frame, text="Базовые")
+
+        # Медицинские датасеты
+        medical_frame = ttk.Frame(datasets_notebook)
+        datasets_notebook.add(medical_frame, text="Медицина")
+
+        # Финансовые датасеты
+        finance_frame = ttk.Frame(datasets_notebook)
+        datasets_notebook.add(finance_frame, text="Финансы")
+
+        # Технические датасеты
+        tech_frame = ttk.Frame(datasets_notebook)
+        datasets_notebook.add(tech_frame, text="Техника")
+
+        # Базовые датасеты
+        ttk.Radiobutton(basic_frame, text="Iris (цветы)", variable=self.dataset_var, value="iris").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(basic_frame, text="Wine (вино)", variable=self.dataset_var, value="wine").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(basic_frame, text="Digits (цифры)", variable=self.dataset_var, value="digits").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(basic_frame, text="Waveform (волны)", variable=self.dataset_var, value="waveform").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(basic_frame, text="Wine Quality (качество вина)", variable=self.dataset_var, value="wine_quality").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(basic_frame, text="Glass (стекло)", variable=self.dataset_var, value="glass").pack(anchor=tk.W, padx=10, pady=2)
+
+        # Медицинские датасеты
+        ttk.Radiobutton(medical_frame, text="Breast Cancer (рак груди)", variable=self.dataset_var, value="breast_cancer").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(medical_frame, text="Diabetes (диабет)", variable=self.dataset_var, value="diabetes").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(medical_frame, text="Heart Disease (болезни сердца)", variable=self.dataset_var, value="heart_disease").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(medical_frame, text="Parkinsons (болезнь Паркинсона)", variable=self.dataset_var, value="parkinsons").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(medical_frame, text="Haberman's Survival (выживаемость)", variable=self.dataset_var, value="haberman").pack(anchor=tk.W, padx=10, pady=2)
+
+        # Финансовые датасеты
+        ttk.Radiobutton(finance_frame, text="Credit Risk (кредитный риск)", variable=self.dataset_var, value="credit_risk").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(finance_frame, text="Banknote (банкноты)", variable=self.dataset_var, value="banknote").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(finance_frame, text="Bank Churn (отток клиентов)", variable=self.dataset_var, value="bank_churn").pack(anchor=tk.W, padx=10, pady=2)
+
+        # Технические датасеты
+        ttk.Radiobutton(tech_frame, text="Sonar (сонар)", variable=self.dataset_var, value="sonar").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(tech_frame, text="Ionosphere (ионосфера)", variable=self.dataset_var, value="ionosphere").pack(anchor=tk.W, padx=10, pady=2)
+        ttk.Radiobutton(tech_frame, text="Electrical Grid (стабильность сети)", variable=self.dataset_var, value="electrical_grid").pack(anchor=tk.W, padx=10, pady=2)
     
         # Кнопка для загрузки пользовательского набора данных
         custom_dataset_frame = ttk.LabelFrame(dataset_frame, text="Пользовательский набор данных:")
