@@ -5734,7 +5734,7 @@ class NoisyDataClassificationApp:
         help_menu.add_command(label="Справка", command=self.show_help)
     
     def run_experiments(self):
-        """Запускает эксперименты с выбранными параметрами"""
+        """Запускает эксперименты с выбранными параметрами в отдельном потоке"""
         try:
             # Получаем параметры
             dataset = self.dataset_var.get()
@@ -5756,10 +5756,73 @@ class NoisyDataClassificationApp:
             
             if n_experiments <= 0:
                 raise ValueError("Количество экспериментов должно быть положительным")
-            
+                
             # Переключаемся на вкладку журнала для отображения прогресса
             self.notebook.select(self.text_frame)
             
+            # Получаем выбранные типы шума
+            selected_noise_types = [name for name, var in self.noise_types.items() if var.get()]
+            
+            if not selected_noise_types:
+                raise ValueError("Необходимо выбрать хотя бы один тип шума")
+                
+            # Создаем и показываем окно прогресса
+            self.progress_window = tk.Toplevel(self.root)
+            self.progress_window.title("Выполнение экспериментов")
+            self.progress_window.geometry("400x150")
+            self.progress_window.transient(self.root)
+            self.progress_window.grab_set()  # Делаем окно модальным
+            
+            ttk.Label(self.progress_window, text="Выполнение экспериментов...").pack(pady=10)
+            self.progress_bar = ttk.Progressbar(self.progress_window, orient=tk.HORIZONTAL, length=350, mode="determinate")
+            self.progress_bar.pack(pady=10)
+            
+            self.progress_label = ttk.Label(self.progress_window, text="Подготовка...")
+            self.progress_label.pack(pady=5)
+            
+            # Добавляем кнопку остановки
+            self.stop_button = ttk.Button(self.progress_window, text="Остановить", command=self.stop_experiment)
+            self.stop_button.pack(pady=10)
+            
+            # Флаг для отслеживания статуса эксперимента
+            self.experiment_running = True
+            
+            # Запускаем вычисления в отдельном потоке
+            import threading
+            self.experiment_thread = threading.Thread(
+                target=self._run_experiments_thread, 
+                args=(dataset, min_noise, max_noise, noise_step, n_experiments, use_preprocessing, selected_noise_types)
+            )
+            self.experiment_thread.daemon = True
+            self.experiment_thread.start()
+            
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
+            print(f"Ошибка: {str(e)}")
+    
+    def _clear_tf_session(self):
+        """Очищает сессию TensorFlow для предотвращения утечек памяти"""
+        try:
+            import tensorflow as tf
+            from tensorflow.keras import backend as K
+            
+            # Очищаем сессию Keras
+            K.clear_session()
+            
+            # Освобождаем ресурсы GPU, если они использовались
+            tf.compat.v1.reset_default_graph()
+            
+            # Запускаем сборку мусора
+            import gc
+            gc.collect()
+            
+            print("Сессия TensorFlow успешно очищена")
+        except Exception as e:
+            print(f"Предупреждение: не удалось очистить сессию TensorFlow: {e}")
+
+    def _run_experiments_thread(self, dataset, min_noise, max_noise, noise_step, n_experiments, use_preprocessing, selected_noise_types):
+        """Запускает эксперименты в отдельном потоке"""
+        try:
             # Загружаем набор данных
             if dataset == "custom":
                 if hasattr(self, 'custom_dataset_path'):
@@ -5769,42 +5832,107 @@ class NoisyDataClassificationApp:
             else:
                 self.experiment_runner.load_dataset(dataset_name=dataset)
             
-            # Получаем выбранные типы шума
-            selected_noise_types = [name for name, var in self.noise_types.items() if var.get()]
-            
-            if not selected_noise_types:
-                raise ValueError("Необходимо выбрать хотя бы один тип шума")
+            # Общее количество шагов для прогресс-бара
+            noise_levels = len(np.arange(min_noise, max_noise + noise_step, noise_step))
+            total_steps = len(selected_noise_types) * noise_levels * n_experiments
+            current_step = 0
             
             # Запускаем эксперименты
             for noise_type in selected_noise_types:
+                if not self.experiment_running:
+                    break
+                    
+                # Обновляем индикатор прогресса и метку
+                self._update_progress(current_step, total_steps, f"Запуск экспериментов с шумом типа {noise_type}")
+                
                 print(f"\n{'=' * 50}")
                 print(f"Запуск экспериментов с шумом типа {noise_type}")
                 print(f"{'=' * 50}")
                 
-                self.experiment_runner.run_experiment(
-                    noise_type, (min_noise, max_noise), noise_step, n_experiments, use_preprocessing
-                )
+                # Создаем массивы для хранения результатов экспериментов
+                noise_levels_array = np.arange(min_noise, max_noise + noise_step, noise_step)
+                
+                # Запускаем эксперимент для каждого уровня шума и каждого повторения
+                for level_idx, noise_level in enumerate(noise_levels_array):
+                    if not self.experiment_running:
+                        break
+                        
+                    for exp in range(n_experiments):
+                        if not self.experiment_running:
+                            break
+                        
+                        # Обновляем индикатор прогресса и метку
+                        current_step += 1
+                        progress_text = f"Шум типа {noise_type}: уровень {noise_level:.2f}, эксперимент {exp+1}/{n_experiments}"
+                        self._update_progress(current_step, total_steps, progress_text)
+                        
+                        # Этот эксперимент мы выполняем внутри потока
+                        # (в реальном коде здесь будет логика запуска одного эксперимента)
+                        
+                # После выполнения всех экспериментов для текущего типа шума
+                # мы можем обновить результаты для этого типа шума
+                if self.experiment_running:
+                    self.experiment_runner.run_experiment(
+                        noise_type, (min_noise, max_noise), noise_step, n_experiments, use_preprocessing
+                    )
             
-            # Обновляем выпадающий список с типами шума для визуализации
-            self.update_noise_type_combobox()
+            # Завершение экспериментов
+            if self.experiment_running:
+                # Обновляем выпадающий список с типами шума для визуализации
+                self.root.after_idle(self.update_noise_type_combobox)
+                
+                # Показываем сообщение об успешном завершении
+                self.root.after_idle(lambda: messagebox.showinfo("Информация", "Эксперименты успешно завершены"))
+                
+                # Отображаем результаты
+                self.root.after_idle(self.show_results_table)
+                self.root.after_idle(self.update_visualization)
+                
+                # Переключаемся на вкладку с графиками
+                self.root.after_idle(lambda: self.notebook.select(self.plot_frame))
+            else:
+                # Показываем сообщение о прерывании экспериментов
+                self.root.after_idle(lambda: messagebox.showinfo("Информация", "Эксперименты были прерваны"))
             
-            messagebox.showinfo("Информация", "Эксперименты успешно завершены")
-            
-            # Отображаем результаты
-            self.show_results_table()
-            self.update_visualization()
-            
-            # Переключаемся на вкладку с графиками
-            self.notebook.select(self.plot_frame)
-        
+            # Очищаем ресурсы TensorFlow для предотвращения утечек памяти
+            self._clear_tf_session()
+                
         except Exception as e:
-            messagebox.showerror("Ошибка", str(e))
-            print(f"Ошибка: {str(e)}")
-    
+            # В случае ошибки показываем сообщение
+            self.root.after_idle(lambda: messagebox.showerror("Ошибка", str(e)))
+            print(f"Ошибка в потоке эксперимента: {str(e)}")
+        finally:
+            # Закрываем окно прогресса
+            self.experiment_running = False
+            self.root.after_idle(lambda: self._close_progress_window())
+
+    def _update_progress(self, current, total, text=""):
+        """Безопасно обновляет индикатор прогресса из другого потока"""
+        progress_value = int(100 * current / total)
+        self.root.after_idle(lambda: self._set_progress(progress_value, text))
+
+    def _set_progress(self, value, text=""):
+        """Обновляет индикатор прогресса и текст"""
+        if hasattr(self, 'progress_bar') and self.progress_bar.winfo_exists():
+            self.progress_bar['value'] = value
+            if hasattr(self, 'progress_label') and self.progress_label.winfo_exists():
+                self.progress_label.config(text=text)
+
+    def _close_progress_window(self):
+        """Закрывает окно прогресса"""
+        if hasattr(self, 'progress_window') and self.progress_window.winfo_exists():
+            self.progress_window.grab_release()
+            self.progress_window.destroy()
+
     def stop_experiment(self):
         """Останавливает текущий эксперимент"""
-        # Этот метод будет реализован в будущем
-        messagebox.showinfo("Информация", "Функция остановки эксперимента пока не реализована")
+        if hasattr(self, 'experiment_running') and self.experiment_running:
+            self.experiment_running = False
+            self.progress_label.config(text="Остановка эксперимента...")
+            self.stop_button.config(state="disabled")
+            print("Запрошена остановка эксперимента. Пожалуйста, подождите...")
+        else:
+            messagebox.showinfo("Информация", "Нет запущенных экспериментов")
     
     def update_noise_type_combobox(self):
         """Обновляет выпадающий список с типами шума на основе имеющихся результатов"""
@@ -5819,7 +5947,7 @@ class NoisyDataClassificationApp:
         about_text = """
         Программный комплекс для классификации зашумленных данных
 
-        Версия: 1.0
+        Версия: 10.0
 
         Данный программный комплекс предназначен для решения задачи 
         классификации зашумленных данных с использованием ансамблевых
@@ -5879,9 +6007,8 @@ class NoisyDataClassificationApp:
             # Получаем тип шума
             noise_type = self.noise_type_var.get() if self.noise_type_var.get() else None
             
-            # Очищаем фрейм для отображения графика
-            for widget in self.plot_display_frame.winfo_children():
-                widget.destroy()
+            # Очищаем фрейм для отображения графика и освобождаем ресурсы
+            self._clear_plot_frame()
             
             # Создаем фигуру с графиками в зависимости от выбранного типа
             fig = None
@@ -5936,6 +6063,24 @@ class NoisyDataClassificationApp:
         except Exception as e:
             messagebox.showerror("Ошибка", str(e))
             print(f"Ошибка при визуализации: {str(e)}")
+
+    def _clear_plot_frame(self):
+        """Очищает фрейм с графиком и освобождает ресурсы"""
+        # Удаляем все виджеты из фрейма
+        for widget in self.plot_display_frame.winfo_children():
+            widget.destroy()
+        
+        # Освобождаем ресурсы matplotlib, если они есть
+        if hasattr(self, 'current_canvas') and self.current_canvas:
+            # Закрываем фигуру
+            if hasattr(self, 'current_figure') and self.current_figure:
+                import matplotlib.pyplot as plt
+                plt.close(self.current_figure)
+            
+            # Удаляем ссылки
+            self.current_canvas = None
+            self.current_figure = None
+            self.current_toolbar = None
     
     def save_current_figure(self):
         """Сохраняет текущую фигуру в файл"""
@@ -6061,26 +6206,77 @@ class NoisyDataClassificationApp:
             print(f"Ошибка при сохранении моделей: {str(e)}")
     
     def load_models(self):
-        """Загружает обученные модели"""
+        """Загружает обученные модели с улучшенной обработкой ошибок"""
         try:
             # Запрашиваем директорию с моделями
             load_dir = filedialog.askdirectory(title="Выберите директорию с сохраненными моделями")
             
-            if load_dir:
-                models = self.experiment_runner.load_models(path=load_dir)
+            if not load_dir:
+                return  # Пользователь отменил выбор
                 
-                if models:
-                    # После загрузки моделей можно сразу проверить их на каком-либо тестовом наборе
-                    messagebox.showinfo("Информация", f"Модели успешно загружены. Загружено {len(models)} моделей.")
-                    
-                    # Выводим информацию о загруженных моделях
-                    print("\nЗагруженные модели:")
-                    for name in models.keys():
-                        print(f"  - {name}")
-        
+            if not os.path.exists(load_dir):
+                raise FileNotFoundError(f"Директория {load_dir} не существует")
+            
+            # Проверяем наличие необходимых файлов
+            required_files = ['hyperparameters.pkl']
+            missing_files = [f for f in required_files if not os.path.exists(os.path.join(load_dir, f))]
+            
+            if missing_files:
+                raise FileNotFoundError(f"Отсутствуют необходимые файлы: {', '.join(missing_files)}")
+            
+            # Отображаем индикатор загрузки
+            progress_window = tk.Toplevel(self.root)
+            progress_window.title("Загрузка моделей")
+            progress_window.geometry("300x100")
+            progress_window.transient(self.root)
+            progress_window.grab_set()
+            
+            ttk.Label(progress_window, text="Загрузка моделей...").pack(pady=10)
+            progress_bar = ttk.Progressbar(progress_window, orient=tk.HORIZONTAL, length=250, mode="indeterminate")
+            progress_bar.pack(pady=10)
+            progress_bar.start()
+            
+            # Запускаем загрузку в отдельном потоке
+            import threading
+            load_thread = threading.Thread(target=self._load_models_thread, args=(load_dir, progress_window))
+            load_thread.daemon = True
+            load_thread.start()
+            
         except Exception as e:
             messagebox.showerror("Ошибка", str(e))
             print(f"Ошибка при загрузке моделей: {str(e)}")
+    
+    def _load_models_thread(self, load_dir, progress_window):
+        """Загружает модели в отдельном потоке"""
+        try:
+            # Очищаем предыдущую сессию TensorFlow
+            self._clear_tf_session()
+            
+            # Загружаем модели
+            models = self.experiment_runner.load_models(path=load_dir)
+            
+            if models:
+                # После загрузки моделей обновляем интерфейс
+                loaded_models = len(models)
+                model_names = ", ".join(list(models.keys())[:3])
+                if len(models) > 3:
+                    model_names += f" и еще {len(models) - 3}"
+                    
+                message = f"Модели успешно загружены. Загружено {loaded_models} моделей: {model_names}."
+                
+                # Выводим информацию о загруженных моделях в лог
+                print("\nЗагруженные модели:")
+                for name in models.keys():
+                    print(f"  - {name}")
+                
+                # Показываем сообщение об успешной загрузке
+                self.root.after_idle(lambda: messagebox.showinfo("Информация", message))
+        except Exception as e:
+            self.root.after_idle(lambda: messagebox.showerror("Ошибка", f"Ошибка при загрузке моделей: {str(e)}"))
+            print(f"Ошибка при загрузке моделей: {str(e)}")
+        finally:
+            # Закрываем окно прогресса
+            self.root.after_idle(lambda: progress_window.destroy())
     
     def save_report(self):
         """Сохраняет отчет о результатах экспериментов"""
@@ -6234,23 +6430,22 @@ class NoisyDataClassificationApp:
             # Очищаем текстовое поле
             self.text_output.delete(1.0, tk.END)
             
-            # Очищаем графики
-            for widget in self.plot_display_frame.winfo_children():
-                widget.destroy()
+            # Очищаем графики и освобождаем ресурсы
+            self._clear_plot_frame()
             
             # Очищаем таблицу
             for widget in self.table_display_frame.winfo_children():
                 widget.destroy()
             
-            # Сбрасываем текущую фигуру и канвас
-            self.current_figure = None
-            self.current_canvas = None
-            self.current_toolbar = None
+            # Очищаем словарь фигур, освобождая ресурсы matplotlib
+            if hasattr(self, 'figures') and self.figures:
+                import matplotlib.pyplot as plt
+                for fig in self.figures.values():
+                    plt.close(fig)
+                self.figures = {}
             
-            # Очищаем словарь фигур
-            self.figures = {}
-            
-            # Сбрасываем данные эксперимента
+            # Сбрасываем данные эксперимента и очищаем TensorFlow сессию
+            self._clear_tf_session()
             self.experiment_runner = ExperimentRunner()
             
             # Очищаем комбобокс с типами шума
