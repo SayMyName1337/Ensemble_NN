@@ -6220,7 +6220,7 @@ class NoisyDataClassificationApp:
             print(f"Ошибка: {str(e)}")
     
     def _clear_tf_session(self):
-        """Очищает сессию TensorFlow для предотвращения утечек памяти"""
+        """Улучшенная очистка сессии TensorFlow и освобождение памяти"""
         try:
             import tensorflow as tf
             from tensorflow.keras import backend as K
@@ -6231,9 +6231,28 @@ class NoisyDataClassificationApp:
             # Освобождаем ресурсы GPU, если они использовались
             tf.compat.v1.reset_default_graph()
             
-            # Запускаем сборку мусора
+            # Принудительно вызываем сборщик мусора несколько раз
             import gc
             gc.collect()
+            gc.collect()
+            
+            # Освобождаем неиспользуемые страницы памяти в ОС
+            if os.name == 'posix':  # Linux/Mac
+                try:
+                    import resource
+                    rusage_denom = 1024
+                    if sys.platform == 'darwin':  # OS X
+                        rusage_denom = rusage_denom * 1024
+                    ru = resource.getrusage(resource.RUSAGE_SELF)
+                    print(f"Использовано памяти: {ru.ru_maxrss / rusage_denom:.2f} МБ")
+                except ImportError:
+                    pass
+            elif os.name == 'nt':  # Windows
+                try:
+                    import ctypes
+                    ctypes.windll.kernel32.SetProcessWorkingSetSize(-1, -1, -1)
+                except:
+                    pass
             
             print("Сессия TensorFlow успешно очищена")
         except Exception as e:
