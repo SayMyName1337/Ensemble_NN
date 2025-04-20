@@ -6151,46 +6151,6 @@ class NoisyDataClassificationApp:
                 self._update_widget_tooltip_color(child, color)
         except:
             pass
-
-    
-
-    def create_menu(self):
-        """Создает главное меню приложения"""
-        self.menu_bar = tk.Menu(self.root)
-        self.root.config(menu=self.menu_bar)
-        
-        # Меню "Файл"
-        file_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="Файл", menu=file_menu)
-        file_menu.add_command(label="Загрузить набор данных...", command=self.load_custom_dataset)
-        file_menu.add_command(label="Загрузить модели...", command=self.load_models)
-        file_menu.add_separator()
-        file_menu.add_command(label="Сохранить модели...", command=self.save_models)
-        file_menu.add_command(label="Сохранить отчет...", command=self.save_report)
-        file_menu.add_command(label="Сохранить текущий график...", command=self.save_current_figure)
-        file_menu.add_separator()
-        file_menu.add_command(label="Выход", command=self.root.destroy)
-        
-        # Меню "Эксперимент"
-        experiment_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="Эксперимент", menu=experiment_menu)
-        experiment_menu.add_command(label="Запустить эксперименты", command=self.run_experiments)
-        experiment_menu.add_command(label="Остановить эксперимент", command=self.stop_experiment)
-        experiment_menu.add_separator()
-        experiment_menu.add_command(label="Очистить результаты", command=self.clear_output)
-        
-        # Меню "Визуализация"
-        visualization_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="Визуализация", menu=visualization_menu)
-        visualization_menu.add_command(label="Общие графики", command=lambda: self.update_visualization(plot_type="general"))
-        visualization_menu.add_command(label="Сравнение моделей", command=lambda: self.update_visualization(plot_type="compare"))
-        visualization_menu.add_command(label="Влияние предобработки", command=lambda: self.update_visualization(plot_type="preprocessing"))
-        
-        # Меню "Справка"
-        help_menu = tk.Menu(self.menu_bar, tearoff=0)
-        self.menu_bar.add_cascade(label="Справка", menu=help_menu)
-        help_menu.add_command(label="О программе", command=self.show_about)
-        help_menu.add_command(label="Справка", command=self.show_help)
     
     def run_experiments(self):
         """Запускает эксперименты с выбранными параметрами в отдельном потоке"""
@@ -6296,7 +6256,7 @@ class NoisyDataClassificationApp:
             total_steps = len(selected_noise_types) * noise_levels * n_experiments
             current_step = 0
             
-            # Запускаем эксперименты
+            # Запускаем эксперименты для каждого типа шума
             for noise_type in selected_noise_types:
                 if not self.experiment_running:
                     break
@@ -6308,32 +6268,27 @@ class NoisyDataClassificationApp:
                 print(f"Запуск экспериментов с шумом типа {noise_type}")
                 print(f"{'=' * 50}")
                 
-                # Создаем массивы для хранения результатов экспериментов
-                noise_levels_array = np.arange(min_noise, max_noise + noise_step, noise_step)
-                
-                # Запускаем эксперимент для каждого уровня шума и каждого повторения
-                for level_idx, noise_level in enumerate(noise_levels_array):
-                    if not self.experiment_running:
-                        break
-                        
-                    for exp in range(n_experiments):
-                        if not self.experiment_running:
-                            break
-                        
-                        # Обновляем индикатор прогресса и метку
-                        current_step += 1
-                        progress_text = f"Шум типа {noise_type}: уровень {noise_level:.2f}, эксперимент {exp+1}/{n_experiments}"
-                        self._update_progress(current_step, total_steps, progress_text)
-                        
-                        # Этот эксперимент мы выполняем внутри потока
-                        # (в реальном коде здесь будет логика запуска одного эксперимента)
-                        
-                # После выполнения всех экспериментов для текущего типа шума
-                # мы можем обновить результаты для этого типа шума
-                if self.experiment_running:
-                    self.experiment_runner.run_experiment(
-                        noise_type, (min_noise, max_noise), noise_step, n_experiments, use_preprocessing
+                try:
+                    # Запускаем эксперимент для текущего типа шума
+                    # Метод run_experiment сам итерирует по уровням шума и повторяет эксперименты
+                    # Также обновляем индикатор прогресса для каждого шага внутри эксперимента
+                    result = self.experiment_runner.run_experiment(
+                        noise_type=noise_type,
+                        noise_range=(min_noise, max_noise),
+                        noise_step=noise_step,
+                        n_experiments=n_experiments,
+                        use_preprocessing=use_preprocessing
                     )
+                    
+                    # Обновляем прогресс после завершения экспериментов для текущего типа шума
+                    current_step += noise_levels * n_experiments
+                    self._update_progress(current_step, total_steps, f"Завершены эксперименты с шумом типа {noise_type}")
+                    
+                except Exception as e:
+                    print(f"Ошибка при выполнении экспериментов с шумом типа {noise_type}: {str(e)}")
+                    # Увеличиваем счетчик, чтобы прогресс-бар не остановился
+                    current_step += noise_levels * n_experiments
+                    self._update_progress(current_step, total_steps, f"Ошибка в экспериментах с шумом типа {noise_type}")
             
             # Завершение экспериментов
             if self.experiment_running:
